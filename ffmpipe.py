@@ -1,7 +1,9 @@
 import sys, os, json
 from subprocess import run, PIPE, Popen as popen
 from threading import Thread
+from datetime import timedelta
 from select import select
+from math import ceil
 
 def os_pipe():
     r,w = os.pipe()
@@ -91,29 +93,44 @@ class FFMpegInput():
 
         return InterleavedPipesIterator(self, seconds)
 
-class SubReader():
+class SubripReader():
     """
     special file reader that checks whether a call to read would block,
     if so returns None.
     """
-    def __init__(self, f, codec):
+    def __init__(self, f):
         self.f = f
-        self.c = codec
 
-    def subrip(self):
-        return b''.join(self.f.readline() for x in range(4))
+    class Label():
+        def __init__(self, f):
+            try:
+                self.no = f.readline().strip()
+                self.beg,self.end = f.readline().strip().split(' --> ')
+                self.label = f.readline()
 
-    def vtt(self):
-        return b''.join(self.f.readline() for x in range(3))
+                while len(f.readline()) > 1:
+                    label += f.readline()
+
+                self.beg = SubripReader.Label.__timedelta(self.beg)
+                self.end = SubripReader.Label.__timedelta(self.end)
+                self.duration = (self.end - self.beg).total_seconds()
+                self.duration = 1 if self.duration == 0 else self.duration
+            except:
+                self.duration = 0
+
+        def __timedelta(s):
+            h,m,s = (float(x.replace(',','.')) for x in s.split(':'))
+            return timedelta(seconds = h*3600+m*60+s)
+
+        def __len__(self):
+            return ceil(self.duration)
+
+        def __repr__(self):
+            return '{}\n{} --> {}\n{}\n'.format( self.no,self.beg,self.end,self.label )
 
     def read(self):
         readable,*_ = select([self.f],[],[], 0)
-
-        try:
-            return getattr(self, self.c)() \
-                   if len(readable) else None
-        except:
-            raise Exception('%s subtitle format not supported' % self.c)
+        return SubripReader.Label(self.f) if len(readable) else None
 
 
 class InterleavedPipesIterator():
@@ -132,9 +149,9 @@ class InterleavedPipesIterator():
         """
         self.s = ffmpeg.streams
         self.p = (r for (r,_) in ffmpeg.pipes)
-        self.p = [os.fdopen(r, 'rb' if s.codec_type == 'audio' else 'rb')\
+        self.p = [os.fdopen(r, 'rb' if s.codec_type == 'audio' else 'r')\
                   for (r,s) in zip(self.p, self.s)]
-        self.p = [SubReader(f,s.codec_name) if s.codec_type == 'subtitle' else f\
+        self.p = [SubripReader(f) if s.codec_type == 'subtitle' else f\
                   for (f,s) in zip(self.p, self.s)]
         self.d = duration
         self.frameno = 0
