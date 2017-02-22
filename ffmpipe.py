@@ -1,4 +1,4 @@
-import sys, os, json
+import sys, os, json, itertools
 from subprocess import run, PIPE, Popen as popen
 from threading import Thread
 from datetime import timedelta
@@ -35,9 +35,9 @@ class CopyFile(Thread):
             buf = self.r.read(self.bufsize)
 
 class FFMpegInput():
-    def __init__(self, f):
-        try: self.f = open(f, 'rb', 0)
-        except: self.f = f
+    def __init__(self, path, streamselect):
+        try: self.f = open(path, 'rb', 0)
+        except: self.f = path
 
         #
         # first probe then read, for this we pipe what
@@ -49,6 +49,7 @@ class FFMpegInput():
                   input=self.probebuf, stdout=PIPE, timeout=10, check=True)
         streams = json.loads(pid.stdout)['streams']
         self.streams = [AttributeDict(d) for d in streams]
+        self.streams = [d for d in self.streams if streamselect(d)]
 
     def __iter__(self, seconds=5):
         """
@@ -188,20 +189,35 @@ class InterleavedPipesIterator():
         return [ None if fin(b) else b for b in blk ]
 
 
-def input(f=None, streams=None, seconds=5):
-    binstdin = lambda: os.fdopen(sys.stdin.fileno(), 'rb')
-    f = FFMpegInput(f or binstdin() if len(sys.argv)==1 else sys.argv[1])
-    c = streams or (lambda s: True)
-    f.streams = [ s for s in f.streams if c(s) ]
-    return f.__iter__(seconds)
+def input(files=None, select=None, seconds=5):
+    """
+    open an ffmpeg readable file and return an iterator, which loops
+    over blocks of data from each stream in an interleaved fashion.
+
+    parameters:
+     files   - (optional) list of or single path(s) to open, if not
+               given read sys.argv or sys.stdin
+     select  - (optional) callable to select the streams that are
+               to be read
+     seconds - (optional) blocksize to be read, defaults to 5 secs
+    """
+    files = files or \
+            sys.argv[1:] if len(sys.argv[1:]) \
+            else os.fdopen(sys.stdin.fileno(), 'rb')
+    strms = select or (lambda s: True)
+    _iter = lambda f: FFMpegInput(f,strms).__iter__(seconds)
+
+    #
+    # concatenate all input files, so that all blocks from file1
+    # are yielded, then all block from file2 etc.
+    #
+    return itertools.chain( *(_iter(f) for f in files) )
 
 if __name__ == '__main__':
     gotya = lambda s: s.codec_type=='audio' and\
                       s.sample_rate=='40'
+    subs = lambda s: s.codec_type == 'subtitle'
 
-    for (a,s) in input(seconds=5):
+    for (s,*_) in input(seconds=5, select=subs):
         if s is not None:
             print(s)
-
-    #for (s,a,b) in input(streams=gotya, blocksize=4096):
-    #    pass
