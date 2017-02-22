@@ -36,14 +36,14 @@ class CopyFile(Thread):
 
 class FFMpegInput():
     def __init__(self, f):
-        f = sys.argv[1] if not f else f
-        self.f = open(f, 'rb', 0)
+        try: self.f = open(f, 'rb', 0)
+        except: self.f = f
 
         #
         # first probe then read, for this we pipe what
         # we already read to an ffprobe process
         #
-        self.probebuf = self.f.read(2048)
+        self.probebuf = self.f.read(2048 * 16)
         pid = run('ffprobe -loglevel error -show_streams '
                   '-print_format json -'.split(),\
                   input=self.probebuf, stdout=PIPE, timeout=10, check=True)
@@ -100,6 +100,7 @@ class SubripReader():
     """
     def __init__(self, f):
         self.f = f
+        self.fileno = f.fileno
 
     class Label():
         def __init__(self, f):
@@ -129,8 +130,7 @@ class SubripReader():
             return '{}\n{} --> {}\n{}\n'.format( self.no,self.beg,self.end,self.label )
 
     def read(self):
-        readable,*_ = select([self.f],[],[], 0)
-        return SubripReader.Label(self.f) if len(readable) else None
+        return SubripReader.Label(self.f)
 
 
 class InterleavedPipesIterator():
@@ -173,9 +173,11 @@ class InterleavedPipesIterator():
         aud = lambda f,s: f.read(int(float(s.sample_rate) * 4 * self.d))
         sub = lambda f,s: f.read()
         fin = lambda b: (not b is None) and len(b)==0
+        read = lambda p,s: aud(p,s) if s.codec_type == 'audio' else sub(p,s)
 
-        blk = [ aud(p,s) if s.codec_type == 'audio'\
-                else sub(p,s) for (p,s) in zip(self.p,self.s) ]
+        rdy,*_ = select(self.p,[],[])
+        blk = [ read(p,s) if p in rdy else None\
+                for (p,s) in zip(self.p, self.s) ]
 
         if all(fin(b) for b in blk):
             raise StopIteration()
@@ -187,7 +189,8 @@ class InterleavedPipesIterator():
 
 
 def input(f=None, streams=None, seconds=5):
-    f = FFMpegInput(f)
+    binstdin = lambda: os.fdopen(sys.stdin.fileno(), 'rb')
+    f = FFMpegInput(f or binstdin() if len(sys.argv)==1 else sys.argv[1])
     c = streams or (lambda s: True)
     f.streams = [ s for s in f.streams if c(s) ]
     return f.__iter__(seconds)
