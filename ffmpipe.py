@@ -1,4 +1,4 @@
-import sys, os, json, itertools
+import sys, os, json, itertools, numpy as np
 from subprocess import run, PIPE, Popen as popen
 from threading import Thread
 from datetime import timedelta
@@ -49,7 +49,7 @@ class FFMpegInput():
                   input=self.probebuf, stdout=PIPE, timeout=10, check=True)
         streams = json.loads(pid.stdout)['streams']
         self.streams = [AttributeDict(d) for d in streams]
-        self.streams = [d for d in self.streams if streamselect(d)]
+        self.streams = [d for d in self.streams if streamselect(d,self.streams)]
 
     def __iter__(self, seconds=5):
         """
@@ -67,7 +67,7 @@ class FFMpegInput():
 
         output = {
          'audio'    : ' -map 0:{s[index]} -f f32le pipe:{p[1]} ',
-         'subtitle' : ' -map 0:{s[index]} -f srt pipe:{p[1]} ' }
+         'subtitle' : ' -map 0:{s[index]} -f webvtt pipe:{p[1]} ' }
 
         self.pipes = [ os_pipe() for s in self.streams ]
         stdin,stdout = os_pipe()
@@ -94,44 +94,65 @@ class FFMpegInput():
 
         return InterleavedPipesIterator(self, seconds)
 
-class SubripReader():
-    """
-    special file reader that checks whether a call to read would block,
-    if so returns None.
-    """
+class WebVTTLabel():
+    def read(f):
+        """ read a label from the given file. This call will consume exactly
+        three lines and fill in the corresponding fields of this object.
+
+         parameters:
+          f - file to be read
+        """
+        self.beg,self.end = f.readline().strip().split(' --> ')
+        self.label = f.readline()
+
+        while len(f.readline()) > 1:
+            label += f.readline()
+
+        self.beg = WebVTTLabel.__timedelta(self.beg)
+        self.end = WebVTTLabel.__timedelta(self.end)
+        self.duration = (self.end - self.beg).total_seconds()
+        self.duration = 1 if self.duration == 0 else self.duration
+
+    def __timedelta(string):
+        h,m,s = (float(x.replace(',','.')) for x in string.split(':'))
+        return timedelta(seconds = h*3600+m*60+s)
+
+    def __timecode(secs):
+        h,m,s = int(secs/3600), int((secs%3600)/60), secs%60
+        return '{:02d}:{:02d}:{:06.3f}'.format(h,m,s) if h>0\
+          else '{:02d}:{:06.3f}'.format(m,s)
+
+    def __init__(self, label=None, beg=None, end=None):
+        """ initialize a new Label object, where label is a string representing
+        the caption that is active from beg to end, where beg end end are floats
+        representing fraction of a seconds that shall be marked.
+
+         parameters:
+          label - caption (string)
+          beg - second from when the caption is to be displayed (float)
+          end - second to which the caption is to be displayed (float)
+        """
+        self.beg = beg
+        self.end = end
+        self.label = label
+
+        if beg is not None and end is not None:
+            self.duration = (end - beg)
+
+    def __len__(self):
+        return ceil(self.duration)
+
+    def __repr__(self):
+        b,e = WebVTTLabel.__timecode(self.beg), WebVTTLabel.__timecode(self.end)
+        return '{} --> {}\n{}\n\n'.format(b,e,self.label)
+
+class WebVTTReader():
     def __init__(self, f):
         self.f = f
         self.fileno = f.fileno
 
-    class Label():
-        def __init__(self, f):
-            try:
-                self.no = f.readline().strip()
-                self.beg,self.end = f.readline().strip().split(' --> ')
-                self.label = f.readline()
-
-                while len(f.readline()) > 1:
-                    label += f.readline()
-
-                self.beg = SubripReader.Label.__timedelta(self.beg)
-                self.end = SubripReader.Label.__timedelta(self.end)
-                self.duration = (self.end - self.beg).total_seconds()
-                self.duration = 1 if self.duration == 0 else self.duration
-            except:
-                self.duration = 0
-
-        def __timedelta(s):
-            h,m,s = (float(x.replace(',','.')) for x in s.split(':'))
-            return timedelta(seconds = h*3600+m*60+s)
-
-        def __len__(self):
-            return ceil(self.duration)
-
-        def __repr__(self):
-            return '{}\n{} --> {}\n{}\n'.format( self.no,self.beg,self.end,self.label )
-
     def read(self):
-        return SubripReader.Label(self.f)
+        return WebVTTReader.read(self.f)
 
 
 class InterleavedPipesIterator():
@@ -152,7 +173,7 @@ class InterleavedPipesIterator():
         self.p = (r for (r,_) in ffmpeg.pipes)
         self.p = [os.fdopen(r, 'rb' if s.codec_type == 'audio' else 'r')\
                   for (r,s) in zip(self.p, self.s)]
-        self.p = [SubripReader(f) if s.codec_type == 'subtitle' else f\
+        self.p = [WebVTTReader(f) if s.codec_type == 'subtitle' else f\
                   for (f,s) in zip(self.p, self.s)]
         self.d = duration
         self.frameno = 0
@@ -171,7 +192,7 @@ class InterleavedPipesIterator():
         We do so by wrapping the subtitle streams with a special select()
         based reader.
         """
-        aud = lambda f,s: f.read(int(float(s.sample_rate) * 4 * self.d))
+        aud = lambda f,s: np.frombuffer(f.read(int(float(s.sample_rate) * s.channels * 4  * self.d)), 'f4').reshape((-1,s.channels))
         sub = lambda f,s: f.read()
         fin = lambda b: (not b is None) and len(b)==0
         read = lambda p,s: aud(p,s) if s.codec_type == 'audio' else sub(p,s)
@@ -198,13 +219,16 @@ def input(files=None, select=None, seconds=5):
      files   - (optional) list of or single path(s) to open, if not
                given read sys.argv or sys.stdin
      select  - (optional) callable to select the streams that are
-               to be read
+               to be read, *select(s,streams)* will be multiple
+               times for each stream in streams and with the overall
+               list, it's return value decides whether the stream
+               is included or not.
      seconds - (optional) blocksize to be read, defaults to 5 secs
     """
     files = files or \
             sys.argv[1:] if len(sys.argv[1:]) \
             else os.fdopen(sys.stdin.fileno(), 'rb')
-    strms = select or (lambda s: True)
+    strms = select or (lambda s: s)
     _iter = lambda f: FFMpegInput(f,strms).__iter__(seconds)
 
     #
