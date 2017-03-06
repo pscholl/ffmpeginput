@@ -97,27 +97,33 @@ class FFMpegInput():
 class WebVTTLabel():
     def read(f):
         """ read a label from the given file. This call will consume exactly
-        three lines and fill in the corresponding fields of this object.
+        one subtitle and fill in the corresponding fields of this object.
 
          parameters:
           f - file to be read
         """
-        self.beg,self.end = f.readline().strip().split(' --> ')
-        self.label = f.readline()
+        try:
+            beg,end  = f.readline().strip().split(' --> ')
+            beg = WebVTTLabel.__timedelta(beg)
+            end = WebVTTLabel.__timedelta(end)
 
-        while len(f.readline()) > 1:
-            label += f.readline()
+            lbl,line = '', f.readline()
+            while len(line) > 1:
+                lbl += line
+                line = f.readline().strip()
 
-        self.beg = WebVTTLabel.__timedelta(self.beg)
-        self.end = WebVTTLabel.__timedelta(self.end)
-        self.duration = (self.end - self.beg).total_seconds()
-        self.duration = 1 if self.duration == 0 else self.duration
+            return WebVTTLabel(lbl, beg, end)
+        except:
+            return ''
 
     def __timedelta(string):
-        h,m,s = (float(x.replace(',','.')) for x in string.split(':'))
+        t = [float(x) for x in string.split(':')]
+        h,m,s = (0,t[0],t[1]) if len(t)==2 else t
         return timedelta(seconds = h*3600+m*60+s)
 
     def __timecode(secs):
+        try: secs = secs.total_seconds()
+        except: pass
         h,m,s = int(secs/3600), int((secs%3600)/60), secs%60
         return '{:02d}:{:02d}:{:06.3f}'.format(h,m,s) if h>0\
           else '{:02d}:{:06.3f}'.format(m,s)
@@ -132,12 +138,13 @@ class WebVTTLabel():
           beg - second from when the caption is to be displayed (float)
           end - second to which the caption is to be displayed (float)
         """
-        self.beg = beg
-        self.end = end
+        self.beg = timedelta(seconds=beg) if type(beg) != timedelta else beg
+        self.end = timedelta(seconds=end) if type(end) != timedelta else end
         self.label = label
 
         if beg is not None and end is not None:
-            self.duration = (end - beg)
+            self.duration = (self.end - self.beg).total_seconds()
+            self.duration = 1 if self.duration == 0 else self.duration
 
     def __len__(self):
         return ceil(self.duration)
@@ -151,8 +158,14 @@ class WebVTTReader():
         self.f = f
         self.fileno = f.fileno
 
+        # read the header
+        line = self.f.readline()
+        if 'WEBVTT' not in line:
+            raise Exception('not a webvtt file')
+        self.f.readline()
+
     def read(self):
-        return WebVTTReader.read(self.f)
+        return WebVTTLabel.read(self.f)
 
 
 class InterleavedPipesIterator():
@@ -240,7 +253,7 @@ def input(files=None, select=None, seconds=5):
 if __name__ == '__main__':
     gotya = lambda s: s.codec_type=='audio' and\
                       s.sample_rate=='40'
-    subs = lambda s: s.codec_type == 'subtitle'
+    subs = lambda s,*_: s.codec_type == 'subtitle'
 
     for (s,*_) in input(seconds=5, select=subs):
         if s is not None:
