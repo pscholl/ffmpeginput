@@ -116,7 +116,7 @@ class WebVTTLabel():
                 line = f.readline().strip()
 
             return WebVTTLabel(lbl, beg, end)
-        except Exception as e:
+        except:
             return ''
 
     def __timedelta(string):
@@ -165,7 +165,6 @@ class WebVTTReader():
         line = self.f.readline()
         if 'WEBVTT' not in line:
             raise Exception('not a webvtt file')
-        self.f.readline()
 
     def read(self):
         return WebVTTLabel.read(self.f)
@@ -259,7 +258,6 @@ if __name__ == '__main__':
                       s.sample_rate=='40'
     subs = lambda s,*_: s.codec_type == 'subtitle'
 
-    for (_,s,_,*_) in input(seconds=5, select=subs):
+    for (s,_,*_) in input(seconds=5, select=subs):
         if s is not None:
             print('{} {} {}'.format(s.beg,s.end,s.label.strip()))
-
