@@ -35,9 +35,11 @@ class CopyFile(Thread):
             buf = self.r.read(self.bufsize)
 
 class FFMpegInput():
-    def __init__(self, path, streamselect):
+    def __init__(self, path, streamselect, extra=''):
         try: self.f = open(path, 'rb', 0)
         except: self.f = path
+
+        self.extra = extra
 
         #
         # first probe then read, for this we pipe what
@@ -74,6 +76,7 @@ class FFMpegInput():
 
         cmd = 'ffmpeg -loglevel error -nostdin' +\
                ' -i pipe:%d ' % stdin +\
+               self.extra +\
                ' '.join(output[s.codec_type].format(s=s, p=p) \
                    for (s,p) in zip(self.streams,self.pipes))
 
@@ -113,7 +116,7 @@ class WebVTTLabel():
                 line = f.readline().strip()
 
             return WebVTTLabel(lbl, beg, end)
-        except:
+        except Exception as e:
             return ''
 
     def __timedelta(string):
@@ -205,7 +208,8 @@ class InterleavedPipesIterator():
         We do so by wrapping the subtitle streams with a special select()
         based reader.
         """
-        aud = lambda f,s: np.frombuffer(f.read(int(float(s.sample_rate) * s.channels * 4  * self.d)), 'f4').reshape((-1,s.channels))
+        siz = lambda s: int(float(s.sample_rate) * s.channels * 4)
+        aud = lambda f,s: np.frombuffer(f.read(siz(s) * self.d), 'f4').reshape((-1,s.channels))
         sub = lambda f,s: f.read()
         fin = lambda b: (not b is None) and len(b)==0
         read = lambda p,s: aud(p,s) if s.codec_type == 'audio' else sub(p,s)
@@ -223,7 +227,7 @@ class InterleavedPipesIterator():
         return [ None if fin(b) else b for b in blk ]
 
 
-def input(files=None, select=None, seconds=5):
+def input(files=None, select=None, seconds=5, extra=''):
     """
     open an ffmpeg readable file and return an iterator, which loops
     over blocks of data from each stream in an interleaved fashion.
@@ -242,7 +246,7 @@ def input(files=None, select=None, seconds=5):
             sys.argv[1:] if len(sys.argv[1:]) \
             else os.fdopen(sys.stdin.fileno(), 'rb')
     strms = select or (lambda s: s)
-    _iter = lambda f: FFMpegInput(f,strms).__iter__(seconds)
+    _iter = lambda f: FFMpegInput(f,strms,extra).__iter__(seconds)
 
     #
     # concatenate all input files, so that all blocks from file1
@@ -255,6 +259,7 @@ if __name__ == '__main__':
                       s.sample_rate=='40'
     subs = lambda s,*_: s.codec_type == 'subtitle'
 
-    for (s,*_) in input(seconds=5, select=subs):
+    for (_,s,_,*_) in input(seconds=5, select=subs):
         if s is not None:
-            print(s)
+            print('{} {} {}'.format(s.beg,s.end,s.label.strip()))
+
