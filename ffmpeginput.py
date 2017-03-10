@@ -66,6 +66,8 @@ class FFMpegInput():
         Parameters:
          seconds - duration of packets that are to be read
         """
+        if len(self.streams) == 0:
+            return []
 
         output = {
          'audio'    : ' -map 0:{s[index]} -f f32le pipe:{p[1]} ',
