@@ -50,8 +50,7 @@ class FFMpegInput():
                   '-print_format json -'.split(),\
                   input=self.probebuf, stdout=PIPE, timeout=10, check=True)
         streams = json.loads(pid.stdout)['streams']
-        self.streams = [AttributeDict(d) for d in streams]
-        self.streams = [d for d in self.streams if streamselect(d,self.streams)]
+        self.streams = streamselect([AttributeDict(d) for d in streams])
 
     def __iter__(self, seconds=5):
         """
@@ -256,10 +255,8 @@ def input(files=None, select=None, seconds=5, extra=''):
     return itertools.chain( *(_iter(f) for f in files) )
 
 if __name__ == '__main__':
-    gotya = lambda s: s.codec_type=='audio' and\
-                      s.sample_rate=='40'
-    subs = lambda s,*_: s.codec_type == 'subtitle'
+    subs = lambda s: [x for x in s if x.codec_type == 'subtitle'][:1]
 
-    for (s,_,*_) in input(seconds=5, select=subs):
+    for (s,*_) in input(seconds=5, select=subs):
         if s is not None:
             print('{} {} {}'.format(s.beg,s.end,s.label.strip()))
