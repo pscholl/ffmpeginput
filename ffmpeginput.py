@@ -168,7 +168,8 @@ class WebVTTReader():
             raise Exception('not a webvtt file')
 
     def read(self):
-        return WebVTTLabel.read(self.f)
+        rdy,*_ = select([self.f],[],[])
+        return WebVTTLabel.read(self.f) if len(rdy) else None
 
 
 class InterleavedPipesIterator():
@@ -214,9 +215,7 @@ class InterleavedPipesIterator():
         fin = lambda b: (not b is None) and len(b)==0
         read = lambda p,s: aud(p,s) if s.codec_type == 'audio' else sub(p,s)
 
-        rdy,*_ = select(self.p,[],[])
-        blk = [ read(p,s) if p in rdy else None\
-                for (p,s) in zip(self.p, self.s) ]
+        blk = [ read(p,s) for (p,s) in zip(self.p, self.s) ]
 
         if all(fin(b) for b in blk):
             raise StopIteration()
