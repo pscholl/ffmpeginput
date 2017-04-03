@@ -17,9 +17,9 @@ class AttributeDict(dict):
 
 class CopyFile(Thread):
     """
-    A Thread to copy data blockwise from one file-descriptor to the next one, this
-    is needed by the FFMpegInput class, as we need tee-like behaviour to probe 
-    before decoding the data in the input.
+    A Thread to copy data blockwise from one file-descriptor to the next one,
+    this is needed by the FFMpegInput class, as we need tee-like behaviour to
+    probe before decoding the data in the input.
     """
     def __init__(self, r,w,bufsize=4096):
         Thread.__init__(self)
@@ -54,17 +54,19 @@ class FFMpegInput():
 
     def __iter__(self, seconds=5):
         """
-        after stream selection, start the ffmpeg instance,
-        push the probe buffer there and switch over to the
-        original file-descriptor as the input for ffmpeg.
+        after stream selection, start the ffmpeg instance, copy over the data
+        used for probing and copy in data from the original file descriptor.
 
-        The selected streams are demuxed to several files,
-        for each of which we create a pipe and hence need
-        to use os.fork etc.
+        The selected streams are demuxed to several files, for each of which we
+        create a pipe and hence the use of os.fork etc.
 
         Parameters:
          seconds - duration of packets that are to be read
         """
+        #
+        # TODO move this into InterleavedPipesIterator otherwise all ffmpeg
+        # are run in parallel
+        #
         if len(self.streams) == 0:
             return []
 
@@ -167,6 +169,11 @@ class WebVTTReader():
         if 'WEBVTT' not in line:
             raise Exception('not a webvtt file')
 
+        # read an empty line
+        line = self.f.readline()
+        if len(line) != 1:
+            raise Exception('not a webvtt file')
+
     def read(self):
         rdy,*_ = select([self.f],[],[])
         return WebVTTLabel.read(self.f) if len(rdy) else None
@@ -255,7 +262,12 @@ def input(files=None, select=None, seconds=5, extra=''):
 
 if __name__ == '__main__':
     subs = lambda s: [x for x in s if x.codec_type == 'subtitle'][:1]
+    accs = lambda s: [x for x in s if 'acc' in x.tags.get('NAME')][:1]
 
-    for (s,*_) in input(seconds=5, select=subs):
-        if s is not None:
-            print('{} {} {}'.format(s.beg,s.end,s.label.strip()))
+    for (s,*_) in input(seconds=5, select=accs):
+        #if s is not None:
+        #    print('{} {} {}'.format(s.beg,s.end,s.label.strip()))
+        print(len(s))
+
+# TODO read multiple files
+# TODO make sure that tuple is sorted after reading a None!
