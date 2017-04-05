@@ -39,8 +39,6 @@ class FFMpegInput():
         try: self.f = open(path, 'rb', 0)
         except: self.f = path
 
-        self.extra = extra
-
         #
         # first probe then read, for this we pipe what
         # we already read to an ffprobe process
@@ -51,6 +49,9 @@ class FFMpegInput():
                   input=self.probebuf, stdout=PIPE, timeout=10, check=True)
         streams = json.loads(pid.stdout)['streams']
         self.streams = streamselect([AttributeDict(d) for d in streams])
+        self.extras  = [extra] * len(self.streams)\
+                       if type(extra)==str else extra
+
 
     def __iter__(self, seconds=5):
         """
@@ -71,17 +72,16 @@ class FFMpegInput():
             return []
 
         output = {
-         'audio'    : ' -map 0:{s[index]} -f f32le pipe:{p[1]} ',
-         'subtitle' : ' -map 0:{s[index]} -f webvtt pipe:{p[1]} ' }
+         'audio'    : ' -map 0:{s[index]} {e} -f f32le pipe:{p[1]} ',
+         'subtitle' : ' -map 0:{s[index]} {e} -f webvtt pipe:{p[1]} ' }
 
         self.pipes = [ os_pipe() for s in self.streams ]
         stdin,stdout = os_pipe()
 
         cmd = 'ffmpeg -loglevel error -nostdin' +\
                ' -i pipe:%d ' % stdin +\
-               self.extra +\
-               ' '.join(output[s.codec_type].format(s=s, p=p) \
-                   for (s,p) in zip(self.streams,self.pipes))
+               ' '.join(output[s.codec_type].format(s=s, p=p, e=e) \
+               for (s,p,e) in zip(self.streams,self.pipes,self.extras))
 
         cmd = cmd.split()
         pid = os.fork()
