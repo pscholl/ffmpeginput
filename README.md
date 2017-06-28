@@ -1,16 +1,19 @@
 # ffmpeginput - python module for using ffmpeg as a pipe
 
- This module allows to write [Unix filter][1], to be used in pipes, with ffmpeg
+ This module allows to write [Unix filters][1], to be used in pipes, with ffmpeg
 as the input parsers. Pretty much in the same way the [fileinput][2] allows you
-to do for text files. For example the following snippet will read from stdin, or
-from the filenames supplied to the script and supply [numpy][3] arrays for the
-selected audio streams for every selected epoch:
+to do for text files. Why? You can now use the capabilities of ffmpeg to
+transport structured data, or simply parse multi-media files in your scripts.
+For example, the following snippets loads all audio and subtitle streams from an
+input file file into memory:
 
     >>> from ffmpeginput import input
+    >>> strms = lambda stream,all: stream.codec_type == 'audio' or\
+    ...                            stream.codec_type == 'subtitle'
+    >>> a,b,c,s = input('example.mkv', select=strms)
 
-    >>> audio = lambda stream,all: stream.codec_type == 'audio'
-    >>> for (a,*_) in input(select=audio, seconds=5):
-    ...     print(a.shape)
+
+## Installation and Requirements
 
 ## Installation
 ## Requirements

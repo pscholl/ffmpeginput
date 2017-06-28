@@ -80,6 +80,7 @@ class FFMpegInput():
 
         cmd = 'ffmpeg -loglevel error -nostdin' +\
                ' -i pipe:%d ' % stdin +\
+               ' -max_muxing_queue_size 800000 -max_interleave_delta 0 ' +\
                ' '.join(output[s.codec_type].format(s=s, p=p, e=e) \
                for (s,p,e) in zip(self.streams,self.pipes,self.extras))
 
@@ -233,7 +234,7 @@ class InterleavedPipesIterator():
         return [ None if fin(b) else b for b in blk ]
 
 
-def input(files=None, select=None, seconds=5, extra=''):
+def input(files=None, select=None, seconds=None, extra=''):
     """
     open an ffmpeg readable file and return an iterator, which loops
     over blocks of data from each stream in an interleaved fashion.
@@ -246,19 +247,31 @@ def input(files=None, select=None, seconds=5, extra=''):
                times for each stream in streams and with the overall
                list, it's return value decides whether the stream
                is included or not.
-     seconds - (optional) blocksize to be read, defaults to 5 secs
+     seconds - (optional) blocksize in seconds, if not specified returns the
+               whole file
     """
     files = files or \
             sys.argv[1:] if len(sys.argv[1:]) \
             else os.fdopen(sys.stdin.fileno(), 'rb')
     strms = select or (lambda s: s)
-    _iter = lambda f: FFMpegInput(f,strms,extra).__iter__(seconds)
+    _iter = lambda f: FFMpegInput(f,strms,extra).__iter__(seconds or 5)
 
     #
     # concatenate all input files, so that all blocks from file1
     # are yielded, then all block from file2 etc.
     #
-    return itertools.chain( *(_iter(f) for f in files) )
+    blocks = itertools.chain( *(_iter(f) for f in files) )
+
+    #
+    # this is used to filter if any stream is shorted than all
+    # others, in which case it is not read when reading the full
+    # file
+    #
+    hasnone = lambda b: any(s is None for s in b)
+    nonemtpy = ( b for b in blocks if not hasnone(b) )
+
+    return blocks if seconds is not None else\
+           list(np.vstack(s) for s in zip(*list(nonemtpy)))
 
 if __name__ == '__main__':
     subs = lambda s: [x for x in s if x.codec_type == 'subtitle'][:1]
