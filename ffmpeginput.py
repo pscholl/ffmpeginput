@@ -78,8 +78,15 @@ class FFMpegInput():
         self.pipes = [ os_pipe() for s in self.streams ]
         stdin,stdout = os_pipe()
 
+        #
+        # TODO this is a hack to avoid the ffmpeg blocking on writing, when
+        # streams are of different length. We stop with the shortest stream
+        #
+        assecond = lambda d: sum( float(t)*f for (t,f) in zip(d.split(':'),[3600,60,1]) )
+        duration = min( assecond(s.tags.get('DURATION')) or 0 for s in self.streams )
+
         cmd = 'ffmpeg -loglevel error -nostdin' +\
-               ' -i pipe:%d ' % stdin +\
+               ' -t %f -i pipe:%d ' % (duration,stdin) +\
                ' -max_muxing_queue_size 800000 -max_interleave_delta 0 ' +\
                ' '.join(output[s.codec_type].format(s=s, p=p, e=e) \
                for (s,p,e) in zip(self.streams,self.pipes,self.extras))
@@ -275,12 +282,15 @@ def input(files=None, select=None, seconds=None, extra=''):
 
 if __name__ == '__main__':
     subs = lambda s: [x for x in s if x.codec_type == 'subtitle'][:1]
-    accs = lambda s: [x for x in s if 'acc' in x.tags.get('NAME')][:1]
+    accs = lambda s: [x for x in s if 'acc' in x.tags.get('NAME')][:6]
+    auds = lambda s: [x for x in s if x.codec_type == 'audio' ]
+    moep = lambda s: print(len(s))
 
-    for (s,*_) in input(seconds=5, select=accs):
+    for streams in input(seconds=5, select=accs):
         #if s is not None:
         #    print('{} {} {}'.format(s.beg,s.end,s.label.strip()))
-        print(len(s))
+        x = "{} " * len(streams)
+        print(x.format( *(len(s) for s in streams) ))
 
 # TODO read multiple files
 # TODO make sure that tuple is sorted after reading a None!
