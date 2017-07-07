@@ -11,9 +11,23 @@ selected audio streams for every selected epoch:
     >>> audio = lambda stream,all: stream.codec_type == 'audio'
     >>> for (a,*_) in input(select=audio, seconds=5):
     ...     print(a.shape)
+    
+ or you can load the whole input into memory at once:
+    >>> from ffmpeginput import input
+
+    >>> audio = lambda stream,all: stream.codec_type == 'audio'
+    >>> a,*_ = input(select=audio)
+    >>> print(a.shape)
 
 ## Installation
+
+ Install with your local python installation with:
+ 
+     >>> python setup.py install --prefix=/usr
+     
 ## Requirements
+
+ Requires a recent version of the ffmpeg binary.
 
 [1]: https://www.bell-labs.com/usr/dmr/www/hist.html#pipes
 [2]: https://docs.python.org/3/library/fileinput.html
