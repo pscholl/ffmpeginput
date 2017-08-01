@@ -52,6 +52,8 @@ class FFMpegInput():
         self.extras  = [extra] * len(self.streams)\
                        if type(extra)==str else extra
 
+        streamselect.streams = self.streams
+
 
     def __iter__(self, seconds=5):
         """
