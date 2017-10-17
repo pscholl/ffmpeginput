@@ -15,7 +15,7 @@ input file file into memory:
  or you can load the whole input into memory at once:
     >>> from ffmpeginput import input
 
-    >>> audio = lambda stream,all: stream.codec_type == 'audio'
+    >>> audio = lambda streams: [s for s in streams if s.codec_type == 'audio']
     >>> a,*_ = input(select=audio)
     >>> print(a.shape)
 
