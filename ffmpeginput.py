@@ -47,7 +47,7 @@ class FFMpegInput():
         pid = run('ffprobe -loglevel error -show_streams '
                   '-print_format json -'.split(),\
                   input=self.probebuf, stdout=PIPE, timeout=10, check=True)
-        streams = json.loads(pid.stdout.read().decode('utf-8-sig'))['streams']
+        streams = json.loads(pid.stdout.decode('utf-8-sig'))['streams']
         self.streams = streamselect([AttributeDict(d) for d in streams])
         self.extras  = [extra] * len(self.streams)\
                        if type(extra)==str else extra
