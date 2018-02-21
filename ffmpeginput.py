@@ -162,13 +162,7 @@ class SyncReader():
         if len(substreams) > 0:
             self.s, _ = s.accept()
             self.s = self.s.makefile()
-
-            #
-            # read WebVTT header
-            #
-            a,b = self.s.readline(), self.s.readline()
-            if 'WEBVTT' not in a or len(b) != 1:
-                raise Exception('not a WebVTT file')
+            self.gotheader = False
 
         self.subtitle = None
         self.needsmuxing = len(audiostreams) > 0 and len(substreams) > 0
@@ -194,8 +188,7 @@ class SyncReader():
         try: audio = self.__nextaudio()
         except: self.r.close()
 
-        try: sub = sub or self.__nextsub()
-        except: self.s.close()
+        sub = sub or self.__nextsub()
 
         self.time += self.delta
         self.subtitle = sub
@@ -218,8 +211,20 @@ class SyncReader():
             return None
 
         r,w,e = select([self.s], [], [], .1)
-        return None if len(r) == 0 else\
-               Webvtt(self.s)
+
+        if len(r) == 0:
+            return
+
+        if self.gotheader == 0:
+            a = self.s.readline()
+            self.gotheader = 1
+        elif self.gotheader == 1:
+            b = self.s.readline()
+            self.gotheader = 2
+            if 'WEBVTT' not in a or len(b) != 1:
+                raise Exception('not a WebVTT file')
+        else:
+            return Webvtt(self.s)
 
     def __nextaudio(self):
         if not hasattr(self, 'r'):
@@ -298,5 +303,5 @@ if __name__ == '__main__':
     #
     # this prints the first audio streams in 5 block seconds
     #
-    for a in input(seconds=5): #, select=subs):
+    for a in input(seconds=5):# , select=audio):
         print(a)
