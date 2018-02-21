@@ -210,6 +210,9 @@ class SyncReader():
         else:
             return audio
 
+    def __iter__(self):
+        return self
+
     def __nextsub(self):
         if not hasattr(self, 's'):
             return None
@@ -274,10 +277,9 @@ class FFmpegInput():
     # Synchronous API support
     #
     def __iter__(self):
-        return SyncReader(self.files[0], self.strms, self.secs, self.extra)
-        #return itertools.chain( *(\
-        #        SyncReader(f, self.strms, self.secs, self.extra)\
-        #        for f in self.files) )
+        #return SyncReader(self.file, self.strms, self.secs, self.extra)
+        read = lambda f: SyncReader(f, self.strms, self.secs, self.extra)
+        return itertools.chain.from_iterable( read(f) for f in self.files )
 
 #
 # export the class directly as a function
