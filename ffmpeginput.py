@@ -1,3 +1,18 @@
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Author: Philipp M. Scholl <pscholl@bawue.de>
+
 import os, sys, asyncio, itertools, json, socket, time, numpy as np, math
 from subprocess import run, PIPE
 from threading import Thread
@@ -108,6 +123,7 @@ class SyncReader():
         assecond = lambda d: sum( float(t)*f for (t,f) in zip(d.split(':'),[3600,60,1]) )
         duration = min( assecond(s.tags.get('DURATION')) or 0 for s in audiostreams )\
                    if len(audiostreams) > 0 else 0
+        meta.duration = duration
 
         #
         # multiple streams can have different sample rates, we use ffmpeg to upsample
@@ -116,7 +132,7 @@ class SyncReader():
         extra = [extra] * len(streams)\
                 if type(extra) == str else extra
 
-        cmd  = 'ffmpeg -loglevel verbose -nostdin '\
+        cmd  = 'ffmpeg -loglevel quiet -nostdin '\
                 '-t {} -i tcp://localhost:{} '\
                 '-max_muxing_queue_size 800000 '\
                 '-max_interleave_delta 0 '
@@ -210,7 +226,8 @@ class SyncReader():
         try: audio = self.__nextaudio()
         except: self.r.close()
 
-        sub = sub or self.__nextsub()
+        try: sub = sub or self.__nextsub()
+        except: self.s.close()
 
         self.time += self.delta
         self.subtitle = sub
@@ -242,10 +259,12 @@ class SyncReader():
         if self.gotheader == 0:
             a = self.s.readline()
             self.gotheader = 1
+            if 'WEBVTT' not in a:
+                raise Exception('not a WebVTT file')
         elif self.gotheader == 1:
             b = self.s.readline()
             self.gotheader = 2
-            if 'WEBVTT' not in a or len(b) != 1:
+            if len(b) != 1:
                 raise Exception('not a WebVTT file')
         else:
             return Webvtt(self.s)
@@ -283,9 +302,10 @@ class FFmpegInput():
                    return value decides whether the stream is included or
                    not.
         """
-        self.files = files or \
-                     sys.argv[1:] if len(sys.argv[1:]) \
-                     else ['-'] # for stdin
+        self.files = [ files ]    if type(files) == str else\
+                     files        if files is not None  else\
+                     sys.argv[1:] if len(sys.argv[1:])  else\
+                     ['-']        # for stdin
         self.strms = select or (lambda s: s)
         self.extra = extra
 
@@ -309,7 +329,14 @@ class FFmpegInput():
 #
 # export the class directly as a function
 #
-input = FFmpegInput
+def input(files=None, select=None, extra='', read=False):
+    ffinput = FFmpegInput(files, select, extra)
+
+    if not read:
+        return ffinput
+    else:
+        ret = np.array(list(ffinput))
+        return ret.T
 
 if __name__ == '__main__':
     #
@@ -321,7 +348,20 @@ if __name__ == '__main__':
     subs  = lambda streams: [s for s in streams\
             if s.codec_type == 'subtitle']
     #
-    # this prints the first audio streams
+    # just print infos about the selected streams
     #
-    for a in input(select=audio):
-        print(a)
+    for *_, m in input('example.mkv'):
+        for a in m.audiostreams:
+            s = "input {}: {} {} {}".format(\
+                    a.index, a.sample_fmt, a.sample_rate,\
+                    a.tags['DURATION'])
+            print(s)
+
+        for a in m.substreams:
+            s = "input {}: {} {}".format(\
+                    a.index, a.codec_type, a.tags['DURATION'])
+            print(s)
+
+        print("output at rate {} for {} seconds".format(\
+                m.samplerate, m.duration))
+        sys.exit(-1)
