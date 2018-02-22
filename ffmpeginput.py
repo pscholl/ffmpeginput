@@ -65,7 +65,7 @@ class SyncReader():
             s.listen(1)
         return socks
 
-    def __init__(self, file, strms, seconds, extra):
+    def __init__(self, file, strms, extra):
         self.file = open(file, 'rb') if file != '-' else\
                     os.fdopen(sys.stdin.fileno(), 'rb')
         buf = self.file.read(SyncReader.BLOCKSIZE)
@@ -95,6 +95,12 @@ class SyncReader():
         # and one for the subtitles.
         #
         r,w,s = self.getsockets(3)
+
+        #
+        # keep track of all information about the processed streams
+        #
+        class empty(object): pass
+        meta = empty()
 
         #
         # build the ffmpeg command line and prepare for reading
@@ -128,6 +134,12 @@ class SyncReader():
             cmd  = cmd.format(samplerate,\
                               *(s.index for s in audiostreams),\
                               r.getsockname()[1])
+            #
+            # Build an info object that is passed through
+            #
+            meta.samplerate = samplerate
+            meta.audiostreams = audiostreams
+
         else:
             r.close()
 
@@ -136,6 +148,8 @@ class SyncReader():
             cmd += '-f webvtt tcp://localhost:{} '
             cmd  = cmd.format( *(ss.index for ss in substreams),\
                                s.getsockname()[1])
+
+            meta.substreams = substreams
         else:
             s.close()
 
@@ -150,7 +164,12 @@ class SyncReader():
 
         self.w, _ = w.accept()
         self.thrd = Thread(target=self.__transfer, args=(buf,)).start()
+        self.meta = meta
 
+
+        #
+        # prepare the input bufffers for reading audio data
+        #
         if len(audiostreams) > 0:
             self.r, _ = r.accept()
             self.buf  = bytearray(sum(channels) * 4)
@@ -159,6 +178,9 @@ class SyncReader():
             self.view = [ np.array(self.mem[a*4:b*4].cast('f'), copy=False)\
                           for (a,b) in zip(indices, indices[1:]) ]
 
+        #
+        # prepare for reading subtitles
+        #
         if len(substreams) > 0:
             self.s, _ = s.accept()
             self.s = self.s.makefile()
@@ -197,11 +219,13 @@ class SyncReader():
            (audio is None and self.needsmuxing):
             raise StopIteration
         elif self.needsmuxing:
-            return audio + [None] if sub is None else\
-                   audio + [sub]  if sub.beg <= self.time else\
-                   audio + [None]
+            ret = audio + [None] if sub is None else\
+                  audio + [sub]  if sub.beg <= self.time else\
+                  audio + [None]
         else:
-            return audio
+            ret = audio
+
+        return ret + [self.meta]
 
     def __iter__(self):
         return self
@@ -242,7 +266,7 @@ class SyncReader():
 
 class FFmpegInput():
 
-    def __init__(self, files=None, select=None, seconds=None, extra=''):
+    def __init__(self, files=None, select=None, extra=''):
         """
         open ffmpeg-readable files and return an iterator, which loops
         over blocks of data from each stream in an interleaved fashion.
@@ -258,14 +282,11 @@ class FFmpegInput():
                    each stream in streams and with the overall list, it's
                    return value decides whether the stream is included or
                    not.
-         seconds - (optional) blocksize in seconds, if not specified returns
-                   the whole file
         """
         self.files = files or \
                      sys.argv[1:] if len(sys.argv[1:]) \
                      else ['-'] # for stdin
         self.strms = select or (lambda s: s)
-        self.secs  = seconds
         self.extra = extra
 
     #
@@ -282,8 +303,7 @@ class FFmpegInput():
     # Synchronous API support
     #
     def __iter__(self):
-        #return SyncReader(self.file, self.strms, self.secs, self.extra)
-        read = lambda f: SyncReader(f, self.strms, self.secs, self.extra)
+        read = lambda f: SyncReader(f, self.strms, self.extra)
         return itertools.chain.from_iterable( read(f) for f in self.files )
 
 #
@@ -301,7 +321,7 @@ if __name__ == '__main__':
     subs  = lambda streams: [s for s in streams\
             if s.codec_type == 'subtitle']
     #
-    # this prints the first audio streams in 5 block seconds
+    # this prints the first audio streams
     #
-    for a in input(seconds=5):# , select=audio):
+    for a in input(select=audio):
         print(a)
