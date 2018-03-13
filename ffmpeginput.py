@@ -292,13 +292,15 @@ class SyncReader():
         """
         buf = bytearray(sum(self.channels) * self.samplerate * math.ceil(self.duration) * 4)
         mem,len = memoryview(buf).cast('B'), 0
-        read = [self.s, self.r]
+        read = []
+        read = read + [self.s] if hasattr(self, 's') else read
+        read = read + [self.r] if hasattr(self, 'r') else read
         subs = []
 
         while read.__len__() > 0:
             r,w,e = select(read, [], [])
 
-            if self.s in r:
+            if hasattr(self, 's') and self.s in r:
                 try:
                     sub = self.__nextsub()
                     if sub:
@@ -306,7 +308,7 @@ class SyncReader():
                 except: 
                     read.remove(self.s)
 
-            if self.r in r:
+            if hasattr(self, 'r') and self.r in r:
                 n = self.r.recv_into(mem[len:], mem.nbytes - len)
                 if n == 0:
                     read.remove(self.r)
@@ -394,8 +396,6 @@ def input(files=None, select=None, extra='', read=False):
 
 
 if __name__ == '__main__':
-    a,b,c,*_ = input(sys.argv[1], read=True)
-
     #
     # selector for audio streams only
     #
@@ -404,6 +404,10 @@ if __name__ == '__main__':
 
     subs  = lambda streams: [s for s in streams\
             if s.codec_type == 'subtitle']
+
+    a,b,c,*_ = input(sys.argv[1], read=True, select=audio)
+    print(a)
+    sys.exit(-1)
 
     #
     # just print infos about the selected streams
