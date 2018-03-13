@@ -124,6 +124,7 @@ class SyncReader():
         duration = min( assecond(s.tags.get('DURATION')) or 0 for s in audiostreams )\
                    if len(audiostreams) > 0 else 0
         meta.duration = duration
+        self.duration = duration
 
         #
         # multiple streams can have different sample rates, we use ffmpeg to upsample
@@ -139,21 +140,21 @@ class SyncReader():
         cmd = cmd.format(duration, w.getsockname()[1])
 
         if len(audiostreams) > 0:
-            channels = [ int(s.channels) for s in audiostreams ]
-            samplerate = max( int(s.sample_rate) for s in audiostreams )
-            self.delta = timedelta(seconds=1./samplerate)
+            self.channels = [ int(s.channels) for s in audiostreams ]
+            self.samplerate = max( int(s.sample_rate) for s in audiostreams )
+            self.delta = timedelta(seconds=1./self.samplerate)
             self.time = timedelta(0)
 
             cmd += '-ar {} '
             cmd += '-map 0:{} ' * len(audiostreams)
             cmd += '-f f32le tcp://localhost:{} '
-            cmd  = cmd.format(samplerate,\
+            cmd  = cmd.format(self.samplerate,\
                               *(s.index for s in audiostreams),\
                               r.getsockname()[1])
             #
             # Build an info object that is passed through
             #
-            meta.samplerate = samplerate
+            meta.samplerate = self.samplerate
             meta.audiostreams = audiostreams
 
         else:
@@ -182,17 +183,11 @@ class SyncReader():
         self.thrd = Thread(target=self.__transfer, args=(buf,)).start()
         self.meta = meta
 
-
         #
         # prepare the input bufffers for reading audio data
         #
         if len(audiostreams) > 0:
             self.r, _ = r.accept()
-            self.buf  = bytearray(sum(channels) * 4)
-            self.mem  = memoryview(self.buf).cast('B')
-            indices   = list(itertools.accumulate([0] + channels))
-            self.view = [ np.array(self.mem[a*4:b*4].cast('f'), copy=False)\
-                          for (a,b) in zip(indices, indices[1:]) ]
 
         #
         # prepare for reading subtitles
@@ -235,16 +230,26 @@ class SyncReader():
         if (audio is None and self.subtitle is None) or\
            (audio is None and self.needsmuxing):
             raise StopIteration
+
         elif self.needsmuxing:
             ret = audio + [None] if sub is None else\
                   audio + [sub]  if sub.beg <= self.time else\
                   audio + [None]
+
         else:
             ret = audio
 
         return ret + [self.meta]
 
     def __iter__(self):
+        #
+        # prepare a buffer for iteration
+        #
+        self.buf  = bytearray(sum(self.channels) * 4)
+        self.mem  = memoryview(self.buf).cast('B')
+        indices   = list(itertools.accumulate([0] + self.channels))
+        self.view = [ np.array(self.mem[a*4:b*4].cast('f'))\
+                      for (a,b) in zip(indices, indices[1:]) ]
         return self
 
     def __nextsub(self):
@@ -254,7 +259,7 @@ class SyncReader():
         r,w,e = select([self.s], [], [], .1)
 
         if len(r) == 0:
-            return
+            return None
 
         if self.gotheader == 0:
             a = self.s.readline()
@@ -281,6 +286,51 @@ class SyncReader():
             len += n
 
         return self.view
+
+    def read(self):
+        """ read all files in one go
+        """
+        buf = bytearray(sum(self.channels) * self.samplerate * math.ceil(self.duration) * 4)
+        mem,len = memoryview(buf).cast('B'), 0
+        read = [self.s, self.r]
+        subs = []
+
+        while read.__len__() > 0:
+            r,w,e = select(read, [], [])
+
+            if self.s in r:
+                try:
+                    sub = self.__nextsub()
+                    if sub:
+                        subs.append(sub)
+                except: 
+                    read.remove(self.s)
+
+            if self.r in r:
+                n = self.r.recv_into(mem[len:], mem.nbytes - len)
+                if n == 0:
+                    read.remove(self.r)
+                len += n
+
+        #
+        # resample the subtitle to fit the samplerate
+        #
+        tosmplr = lambda secs: int(secs * self.samplerate)
+        newsubs = [None] * tosmplr(self.duration)
+        for sub in subs:
+            beg = tosmplr(sub.beg.total_seconds())
+            end = tosmplr(sub.end.total_seconds())
+            newsubs[beg:end] = [sub] * (end-beg)
+
+        #
+        # create a numpy array from the memoryview
+        #
+        mem = mem.cast('f')
+        num = sum(self.channels)
+        idx = list(itertools.accumulate([0] + self.channels))
+        arr = np.array(mem, copy=False).reshape((-1,num))
+        arr = [ arr[:, a:b] for (a,b) in zip(idx,idx[1:]) ]
+        return arr + [newsubs] + [self.meta]
 
 
 class FFmpegInput():
@@ -323,8 +373,12 @@ class FFmpegInput():
     # Synchronous API support
     #
     def __iter__(self):
-        read = lambda f: SyncReader(f, self.strms, self.extra)
-        return itertools.chain.from_iterable( read(f) for f in self.files )
+        readers = [SyncReader(f, self.strms, self.extra) for f in self.files]
+        return itertools.chain.from_iterable( read for read in readers )
+
+    def read(self):
+        readers = [SyncReader(f, self.strms, self.extra) for f in self.files]
+        return [reader.read() for reader in readers]
 
 #
 # export the class directly as a function
@@ -335,22 +389,26 @@ def input(files=None, select=None, extra='', read=False):
     if not read:
         return ffinput
     else:
-        ret = np.array(list(ffinput))
-        return ret.T
+        data = ffinput.read()
+        return data[0] if len(data)==1 else data
+
 
 if __name__ == '__main__':
+    a,b,c,*_ = input(sys.argv[1], read=True)
+
     #
     # selector for audio streams only
     #
     audio = lambda streams: [s for s in streams\
-            if s.codec_type == 'audio']
+            if s.codec_type == 'audio'][8:9]
 
     subs  = lambda streams: [s for s in streams\
             if s.codec_type == 'subtitle']
+
     #
     # just print infos about the selected streams
     #
-    for *_, m in input('example.mkv'):
+    for *_, m in input(sys.argv[1], select=lambda s: audio(s)+subs(s)):
         for a in m.audiostreams:
             s = "input {}: {} {} {}".format(\
                     a.index, a.sample_fmt, a.sample_rate,\
