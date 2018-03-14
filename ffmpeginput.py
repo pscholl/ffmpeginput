@@ -290,8 +290,10 @@ class SyncReader():
     def read(self):
         """ read all files in one go
         """
-        buf = bytearray(sum(self.channels) * self.samplerate * math.ceil(self.duration) * 4)
-        mem,len = memoryview(buf).cast('B'), 0
+        if hasattr(self, 'r'):
+            buf = bytearray(sum(self.channels) * self.samplerate * math.ceil(self.duration) * 4)
+            mem,len = memoryview(buf).cast('B'), 0
+
         read = []
         read = read + [self.s] if hasattr(self, 's') else read
         read = read + [self.r] if hasattr(self, 'r') else read
@@ -317,12 +319,15 @@ class SyncReader():
         #
         # resample the subtitle to fit the samplerate
         #
-        tosmplr = lambda secs: int(secs * self.samplerate)
-        newsubs = [None] * tosmplr(self.duration)
-        for sub in subs:
-            beg = tosmplr(sub.beg.total_seconds())
-            end = tosmplr(sub.end.total_seconds())
-            newsubs[beg:end] = [sub] * (end-beg)
+        if hasattr(self, 'samplerate'):
+            tosmplr = lambda secs: int(secs * self.samplerate)
+            newsubs = [None] * tosmplr(self.duration)
+            for sub in subs:
+                beg = tosmplr(sub.beg.total_seconds())
+                end = tosmplr(sub.end.total_seconds())
+                newsubs[beg:end] = [sub] * (end-beg)
+        else:
+            return subs
 
         #
         # create a numpy array from the memoryview
@@ -332,7 +337,7 @@ class SyncReader():
         idx = list(itertools.accumulate([0] + self.channels))
         arr = np.array(mem, copy=False).reshape((-1,num))
         arr = [ arr[:, a:b] for (a,b) in zip(idx,idx[1:]) ]
-        return arr + [newsubs] + [self.meta]
+        return arr + [np.array(newsubs)] + [self.meta]
 
 
 class FFmpegInput():
@@ -405,8 +410,8 @@ if __name__ == '__main__':
     subs  = lambda streams: [s for s in streams\
             if s.codec_type == 'subtitle']
 
-    a,b,c,*_ = input(sys.argv[1], read=True, select=audio)
-    print(a)
+    a,*_,s,m = input(sys.argv[1], read=True, select=lambda x: audio(x)+subs(x))
+    print([x for x in s if x is not None])
     sys.exit(-1)
 
     #
